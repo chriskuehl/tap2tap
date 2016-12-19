@@ -36,5 +36,25 @@ It works, and I'm using it, but it's missing key features (like encryption and
 authentication), and has a couple design quirks I plan to factor out.
 
 
+### Usage
+
+It's very inflexible currently. For testing you can try:
+
+*  on your client:
+   ```
+   $ SERVER=1.2.3.4 tap2tap
+   ```
+
+*  on your server:
+   ```
+   $ tap2tap
+   ```
+
+Currently it always binds to port `1234`, sorry.
+
+You'll probably want to add an IP to the interface (e.g. `ip addr add
+10.0.0.1/24 dev tap1`).
+
+
 [sigmavpn]: https://github.com/neilalexander/sigmavpn
 [quicktun]: http://wiki.ucis.nl/QuickTun
