@@ -1,2 +1,4 @@
+CFLAGS=-std=gnu99 -Wall -Werror -O3
+
 tap2tap: tap2tap.c
-	gcc -std=gnu99 -o "$@" "$<"
+	$(CC) $(CCFLAGS) -o "$@" "$<"
