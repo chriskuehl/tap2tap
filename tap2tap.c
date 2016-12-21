@@ -38,8 +38,8 @@
 #include <linux/if_tun.h>
 
 #define MTU 1500
-#define RECV_QUEUE 128
-#define SEND_QUEUE 128
+#define RECV_QUEUE 1024
+#define SEND_QUEUE 1024
 
 
 const char *VERSION = "0.0.0";
@@ -84,6 +84,35 @@ int up_iface(char *name) {
 }
 
 
+int set_mtu(char *name, unsigned int mtu) {
+    struct ifreq req;
+    memset(&req, 0, sizeof req);
+    req.ifr_mtu = mtu;
+
+    if (strlen(name) + 1 >= IFNAMSIZ) {
+        fprintf(stderr, "device name is too long: %s\n", name);
+        return -1;
+    }
+    strncpy(req.ifr_name, name, IFNAMSIZ);
+
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("socket");
+        return sockfd;
+    }
+
+    int err = ioctl(sockfd, SIOCSIFMTU, &req);
+    if (err < 0) {
+        perror("ioctl");
+        close(sockfd);
+        return err;
+    }
+
+    close(sockfd);
+    return 0;
+}
+
+
 int setup_tap(char *name, char return_name[IFNAMSIZ]) {
     // https://raw.githubusercontent.com/torvalds/linux/master/Documentation/networking/tuntap.txt
     int fd = open("/dev/net/tun", O_RDWR);
@@ -114,6 +143,13 @@ int setup_tap(char *name, char return_name[IFNAMSIZ]) {
 
     strncpy(return_name, req.ifr_name, IFNAMSIZ);
     return_name[IFNAMSIZ - 1] = '\0';
+
+    // TODO: why must subtract here?
+    err = set_mtu(return_name, MTU - 50);
+    if (err < 0) {
+        close(fd);
+        return err;
+    }
 
     err = up_iface(return_name);
     if (err < 0) {
@@ -304,8 +340,6 @@ int main(int argc, char *argv[]) {
                 }
             } else if (n < f->len) {
                 printf("[error] only wrote %zd bytes to tap (out of %zd bytes)\n", n, f->len);
-            } else {
-                printf("wrote %zd bytes to tap\n", n);
             }
         }
 
@@ -322,8 +356,6 @@ int main(int argc, char *argv[]) {
                 return 4;
             } else if (n < f->len) {
                 printf("[error] only sent %zd bytes to peer (out of %zd bytes)\n", n, f->len);
-            } else {
-                printf("sent %zd bytes to peer\n", n);
             }
         }
 
