@@ -5,8 +5,6 @@
  * support for legacy systems. it runs only on modern linux. it is L2 only.
  *
  * features still needed, in order of priority:
- *   - basic command-line interface
- *   - ability to call a script after the interface is ready (to configure IPs, etc)
  *   - tests
  *   - encryption
  *   - privilege-dropping at runtime
