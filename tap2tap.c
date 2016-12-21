@@ -16,6 +16,7 @@
 #define _GNU_SOURCE
 
 #include <arpa/inet.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -36,12 +37,21 @@
 #include <linux/if.h>
 #include <linux/if_tun.h>
 
+#define MTU 1500
+#define RECV_QUEUE 128
+#define SEND_QUEUE 128
 
-const char *VERSION = "0.0.1";
+
+const char *VERSION = "0.0.0";
 
 struct args {
     char *iface;
     char *remote;
+};
+
+struct frame {
+    size_t len;
+    char data[MTU];
 };
 
 
@@ -100,10 +110,6 @@ int setup_tap(char *name, char return_name[IFNAMSIZ]) {
         close(fd);
         perror("ioctl");
         return err;
-    }
-
-    if (!name) {
-        name = "tap0";
     }
 
     strncpy(return_name, req.ifr_name, IFNAMSIZ);
@@ -227,18 +233,14 @@ int main(int argc, char *argv[]) {
         return 2;
     }
 
-    // TODO: buffers are really crummy data structures and really don't work
-    // here since each write to the tap device must be one entire frame; the
-    // only reason this works is luck (and lots of retries)
-    //
-    // ultimately we probably need a queue of frames here
 
-    // bytes received from remote, want to write to fd
-    char received_buffer[8192];
-    size_t received_len = 0;
+    // circular queues
+    struct frame recv_queue[RECV_QUEUE] = {0};
+    size_t recv_idx = 0;
+    size_t recv_len = 0;
 
-    // bytes read from fd, want to write to remote
-    char send_buffer[8192];
+    struct frame send_queue[SEND_QUEUE] = {0};
+    size_t send_idx = 0;
     size_t send_len = 0;
 
     struct timespec tm;
@@ -269,7 +271,7 @@ int main(int argc, char *argv[]) {
 
     for (;;) {
         fds[0].events = POLLIN;
-        if (received_len > 0) {
+        if (recv_len > 0) {
             fds[0].events |= POLLOUT;
         }
 
@@ -287,74 +289,97 @@ int main(int argc, char *argv[]) {
 
         // tap can handle a write
         if (fds[0].revents & POLLOUT) {
-            // TODO: nonblocking?
-            ssize_t n = write(fd, received_buffer, received_len);
+            struct frame *f = &recv_queue[recv_idx];
+            assert(f->len <= MTU);
+            recv_idx = (recv_idx + 1) % RECV_QUEUE;
+            recv_len -= 1;
+
+            ssize_t n = write(fd, f->data, f->len);
             if (n < 0) {
                 if (errno == EINVAL) {
-                    fprintf(stderr, "wrote garbage frame\n");
-                    // this entire buffer is bunk, dunno how far to skip
-                    received_len = 0;
+                    fprintf(stderr, "received garbage frame\n");
                 } else {
                     perror("write");
                     return 4;
                 }
+            } else if (n < f->len) {
+                printf("[error] only wrote %zd bytes to tap (out of %zd bytes)\n", n, f->len);
             } else {
                 printf("wrote %zd bytes to tap\n", n);
-                received_len -= n;
-                if (received_len > 0) {
-                    memmove(received_buffer, received_buffer + n, received_len);
-                }
             }
         }
 
         // udp socket can handle a write
         if (fds[1].revents & POLLOUT) {
-            // TODO: nonblocking?
-            printf("want to write up to: %zu\n", received_len);
-            ssize_t n = sendto(sockfd, send_buffer, send_len, 0, (struct sockaddr *) &remote, sizeof remote);
+            struct frame *f = &send_queue[send_idx];
+            assert(f->len <= MTU);
+            send_idx = (send_idx + 1) % SEND_QUEUE;
+            send_len -= 1;
+
+            ssize_t n = sendto(sockfd, f->data, f->len, 0, (struct sockaddr *) &remote, sizeof remote);
             if (n < 0) {
-                perror("write");
+                perror("sendto");
                 return 4;
+            } else if (n < f->len) {
+                printf("[error] only sent %zd bytes to peer (out of %zd bytes)\n", n, f->len);
             } else {
-                printf("wrote %zd bytes\n", n);
-                send_len -= n;
-                if (send_len > 0) {
-                    memmove(send_buffer, send_buffer + n, send_len);
-                }
+                printf("sent %zd bytes to peer\n", n);
             }
         }
 
         // tap has data for us to read
-        if (fds[0].revents & POLLIN && send_len < sizeof(send_buffer)) {
-            ssize_t n = read(fd, send_buffer, sizeof(send_buffer) - send_len);
-            printf("read from tap: %zd\n", n);
-            if (n < 0) {
-                perror("read");
-                return 4;
+        if (fds[0].revents & POLLIN) {
+            size_t idx = (send_idx + send_len) % SEND_QUEUE;
+
+            if (send_len < SEND_QUEUE) {
+                send_len += 1;
             } else {
-                send_len += n;
+                assert(send_len == SEND_QUEUE);
+                printf("dropping frame from send queue\n");
+
+                // put this packet at the end of the queue;
+                // drop the first frame in the queue
+                send_idx += 1;
             }
+
+            struct frame *f = &send_queue[idx];
+            memset(f, 0, sizeof(struct frame));
+            ssize_t n = read(fd, &f->data, MTU);
+            assert(n <= MTU);
+            f->len = n;
         }
 
-
         // udp socket has data for us to read
-        if (fds[1].revents & POLLIN && received_len < sizeof(received_buffer)) {
-            socklen_t l = sizeof remote;
+        if (fds[1].revents & POLLIN) {
+            size_t idx = (recv_idx + recv_len) % RECV_QUEUE;
+
+            if (recv_len < RECV_QUEUE) {
+                recv_len += 1;
+            } else {
+                assert(recv_len == RECV_QUEUE);
+                printf("dropping frame from recv queue\n");
+
+                // put this packet at the end of the queue;
+                // drop the first frame in the queue
+                recv_idx += 1;
+            }
+
+            struct frame *f = &recv_queue[idx];
+            memset(f, 0, sizeof(struct frame));
+
+            // TODO: handle case where remote changes, in both server+client mode
+            socklen_t l = sizeof(remote);
             has_remote = 1;
             ssize_t n = recvfrom(
                 sockfd,
-                received_buffer,
-                sizeof(received_buffer) - received_len,
+                &f->data,
+                MTU,
                 0,
                 (struct sockaddr *) &remote,
                 &l
             );
-            printf("read from udp: %zd\n", n);
-            if (n < 0) {
-                perror("recvfrom");
-                return 4;
-            }
-            received_len += n;
+            assert(n <= MTU);
+            f->len = n;
         }
     }
 }
