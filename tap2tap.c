@@ -30,6 +30,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -47,6 +48,7 @@ const char *VERSION = "0.0.0";
 struct args {
     char *iface;
     char *remote;
+    char *up_script;
 };
 
 struct frame {
@@ -186,12 +188,14 @@ int setup_socket(in_addr_t bind_addr, uint16_t bind_port) {
 
 void print_help(char *argv[]) {
     fprintf(stderr, "tap2tap v%s\n", VERSION);
-    fprintf(stderr, "Usage: %s [--dev {device}] [--remote {remote}]\n", argv[0]);
+    fprintf(stderr, "Usage: %s [--dev {device}] [--remote {remote}] [--up {binary}]\n", argv[0]);
     fprintf(stderr, "\n");
     fprintf(stderr, "Optional arguments:\n");
     fprintf(stderr, "  -i, --iface {iface}  Name of the tap device interface.\n");
     fprintf(stderr, "                       (default: kernel auto-assign)\n");
     fprintf(stderr, "  -r, --remote {addr}  IPv4 address of the remote peer.\n");
+    fprintf(stderr, "  -u, --up {binary}    Binary to excecute when the interface is up.\n");
+    fprintf(stderr, "                       The only argument passed will be the interface name.\n");
     fprintf(stderr, "  -h, --help           Print this help message and exit.\n");
     fprintf(stderr, "  -V, --version        Print the current version and exit.\n");
     fprintf(stderr, "\n");
@@ -223,9 +227,10 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
         {"version", no_argument, NULL, 0},
         {"remote", required_argument, NULL, 'r'},
         {"iface", required_argument, NULL, 'i'},
+        {"up", required_argument, NULL, 'u'},
         {NULL, 0, NULL, 0},
     };
-    while ((opt = getopt_long(argc, argv, "+hVr:i:", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "+hVr:i:u:", long_options, NULL)) != -1) {
         switch (opt) {
             case 'h':
                 print_help(argv);
@@ -239,12 +244,34 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
             case 'i':
                 args->iface = optarg;
                 break;
+            case 'u':
+                args->up_script = optarg;
+                break;
             default:
                 exit(1);
         }
     }
     if (argv[optind]) {
         fprintf(stderr, "error: extra argument given: %s\n", argv[optind]);
+        exit(1);
+    }
+}
+
+
+int run_up(char *script, char *device) {
+    pid_t pid = fork();
+    if (pid == 0) {  // child
+        execlp(script, script, device, NULL);
+
+        // exec failed
+        perror("exec");
+        exit(1);
+    } else if (pid > 0) {  // parent
+        int ret;
+        waitpid(pid, &ret, 0);
+        return WEXITSTATUS(ret);
+    } else {
+        perror("fork");
         exit(1);
     }
 }
@@ -263,6 +290,15 @@ int main(int argc, char *argv[]) {
     }
     printf("tap device is: %s\n", device);
 
+    if (args.up_script) {
+        int ret = run_up(args.up_script, device);
+        if (ret != 0) {
+            fprintf(stderr, "up script exited with status: %d\n", ret);
+            return 1;
+        }
+    }
+
+    // TODO: make the port and bind address configurable
     int sockfd = setup_socket(inet_addr("0.0.0.0"), 1234);
     if (sockfd < 0) {
         fprintf(stderr, "unable to create socket\n");
@@ -305,6 +341,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "running in client mode with remote: %s\n", args.remote);
     }
 
+    fprintf(stderr, "tunnel is up\n");
     for (;;) {
         fds[0].events = POLLIN;
         if (recv_len > 0) {
