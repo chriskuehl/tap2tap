@@ -17,7 +17,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
@@ -32,136 +31,20 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <net/if.h>
-#include <linux/if.h>
-#include <linux/if_tun.h>
+#include "tap2tap.h"
+#include "iface.h"
 
-#define MTU 1500
 #define RECV_QUEUE 1024
 #define SEND_QUEUE 1024
 
 
-const char *VERSION = "0.0.0";
-
-const int QUIT_SIGNALS[] = {SIGTERM, SIGINT, SIGHUP, SIGQUIT};
-
-struct args {
-    char *iface;
-    char *remote;
-    char *up_script;
-    char *down_script;
-};
+char exit_wanted = 0;
+int received_signal = 0;
 
 struct frame {
     size_t len;
     char data[MTU];
 };
-
-
-int up_iface(char *name) {
-    struct ifreq req;
-    memset(&req, 0, sizeof req);
-    req.ifr_flags = IFF_UP;
-
-    if (strlen(name) + 1 >= IFNAMSIZ) {
-        fprintf(stderr, "device name is too long: %s\n", name);
-        return -1;
-    }
-    strncpy(req.ifr_name, name, IFNAMSIZ);
-
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("socket");
-        return sockfd;
-    }
-
-    int err = ioctl(sockfd, SIOCSIFFLAGS, &req);
-    if (err < 0) {
-        perror("ioctl");
-        close(sockfd);
-        return err;
-    }
-
-    close(sockfd);
-    return 0;
-}
-
-
-int set_mtu(char *name, unsigned int mtu) {
-    struct ifreq req;
-    memset(&req, 0, sizeof req);
-    req.ifr_mtu = mtu;
-
-    if (strlen(name) + 1 >= IFNAMSIZ) {
-        fprintf(stderr, "device name is too long: %s\n", name);
-        return -1;
-    }
-    strncpy(req.ifr_name, name, IFNAMSIZ);
-
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("socket");
-        return sockfd;
-    }
-
-    int err = ioctl(sockfd, SIOCSIFMTU, &req);
-    if (err < 0) {
-        perror("ioctl");
-        close(sockfd);
-        return err;
-    }
-
-    close(sockfd);
-    return 0;
-}
-
-
-int setup_tap(char *name, char return_name[IFNAMSIZ]) {
-    // https://raw.githubusercontent.com/torvalds/linux/master/Documentation/networking/tuntap.txt
-    int fd = open("/dev/net/tun", O_RDWR);
-    if (fd < 0) {
-        perror("open");
-        return fd;
-    }
-
-    struct ifreq req;
-    memset(&req, 0, sizeof req);
-    req.ifr_flags = IFF_TAP | IFF_NO_PI;
-
-    if (name) {
-        if (strlen(name) + 1 >= IFNAMSIZ) {
-            close(fd);
-            fprintf(stderr, "device name is too long: %s\n", name);
-            return -1;
-        }
-        strncpy(req.ifr_name, name, IFNAMSIZ);
-    }
-
-    int err = ioctl(fd, TUNSETIFF, &req);
-    if (err < 0) {
-        close(fd);
-        perror("ioctl");
-        return err;
-    }
-
-    strncpy(return_name, req.ifr_name, IFNAMSIZ);
-    return_name[IFNAMSIZ - 1] = '\0';
-
-    // TODO: why must subtract here?
-    err = set_mtu(return_name, MTU - 50);
-    if (err < 0) {
-        close(fd);
-        return err;
-    }
-
-    err = up_iface(return_name);
-    if (err < 0) {
-        close(fd);
-        return err;
-    }
-
-    return fd;
-}
 
 
 int setup_socket(in_addr_t bind_addr, uint16_t bind_port) {
@@ -187,92 +70,12 @@ int setup_socket(in_addr_t bind_addr, uint16_t bind_port) {
 }
 
 
-void print_help(int argc, char *argv[]) {
-    assert(argc >= 1);
-    fprintf(stderr, "tap2tap v%s\n", VERSION);
-    fprintf(stderr, "Usage: %s [--dev {device}] [--remote {remote}]\n", argv[0]);
-    fprintf(stderr, "       %*s [--up {binary}] [--down {binary}]\n", strlen(argv[0]), "");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Optional arguments:\n");
-    fprintf(stderr, "  -i, --iface {iface}  Name of the tap device interface.\n");
-    fprintf(stderr, "                       (default: kernel auto-assign)\n");
-    fprintf(stderr, "  -r, --remote {addr}  IPv4 address of the remote peer.\n");
-    fprintf(stderr, "  -u, --up {binary}    Binary to excecute when the interface is up.\n");
-    fprintf(stderr, "                       The only argument passed will be the interface name.\n");
-    fprintf(stderr, "  -d, --down {binary}  Binary to execute after the tunnel closes.\n");
-    fprintf(stderr, "                       The only argument passed will be the interface name.\n");
-    fprintf(stderr, "                       At this point, the interface still exists.\n");
-    fprintf(stderr, "  -h, --help           Print this help message and exit.\n");
-    fprintf(stderr, "  -V, --version        Print the current version and exit.\n");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Example usage:\n");
-    fprintf(stderr, "  On your server: %s -i tap0\n", argv[0]);
-    fprintf(stderr, "  This creates a tap device and waits for UDP connections from any host.\n");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "  On your client: %s -i tap0 --remote 1.2.3.4\n", argv[0]);
-    fprintf(stderr, "  This creates a tap device and tries to connect to the remote host.\n");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "tap2tap has two basic modes: server and client. Both modes work by\n");
-    fprintf(stderr, "creating a tap device and shuffling packets back-and-forth over UDP.\n");
-    fprintf(stderr, "In server mode, however, no traffic is sent until a connection from a\n");
-    fprintf(stderr, "client is received. In client mode, traffic is immediately sent to the\n");
-    fprintf(stderr, "remote IP address (and incoming traffic is only accepted from that\n");
-    fprintf(stderr, "IP).\n");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "If you're tunneling between two hosts with static IPs, you can specify\n");
-    fprintf(stderr, "--remote on both ends of the tunnel.\n");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "In all cases, at least one host must specify --remote.\n");
-}
-
-
-void cli_parse(struct args *args, int argc, char *argv[]) {
-    int opt;
-    struct option long_options[] = {
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 0},
-        {"remote", required_argument, NULL, 'r'},
-        {"iface", required_argument, NULL, 'i'},
-        {"up", required_argument, NULL, 'u'},
-        {"down", required_argument, NULL, 'd'},
-        {NULL, 0, NULL, 0},
-    };
-    while ((opt = getopt_long(argc, argv, "+hVr:i:u:d:", long_options, NULL)) != -1) {
-        switch (opt) {
-            case 'h':
-                print_help(argc, argv);
-                exit(0);
-            case 'V':
-                fprintf(stderr, "tap2tap v%s\n", VERSION);
-                exit(0);
-            case 'r':
-                args->remote = optarg;
-                break;
-            case 'i':
-                args->iface = optarg;
-                break;
-            case 'u':
-                args->up_script = optarg;
-                break;
-            case 'd':
-                args->down_script = optarg;
-                break;
-            default:
-                exit(1);
-        }
-    }
-    if (argv[optind]) {
-        fprintf(stderr, "error: extra argument given: %s\n", argv[optind]);
-        exit(1);
-    }
-}
 
 
 int run_updown(char *script, char *device) {
     pid_t pid = fork();
     if (pid == 0) {  // child
         execlp(script, script, device, NULL);
-
         // exec failed
         perror("exec");
         exit(1);
@@ -287,31 +90,18 @@ int run_updown(char *script, char *device) {
 }
 
 
-char exit_wanted = 0;
-int received_signal = 0;
 
-
-void handle_signal(int signum) {
-    exit_wanted = 1;
-    received_signal = signum;
-}
-
-
-int main(int argc, char *argv[]) {
-    struct args args;
-    memset(&args, 0, sizeof args);
-    cli_parse(&args, argc, argv);
-
+int run_tunnel(struct args *args, sigset_t *orig_mask) {
     char device[IFNAMSIZ];
-    int fd = setup_tap(args.iface, device);
+    int fd = create_tap(args->iface, device, MTU);
     if (fd < 0) {
         fprintf(stderr, "unable to create tap device\n");
         return 1;
     }
     printf("tap device is: %s\n", device);
 
-    if (args.up_script) {
-        int ret = run_updown(args.up_script, device);
+    if (args->up_script) {
+        int ret = run_updown(args->up_script, device);
         if (ret != 0) {
             fprintf(stderr, "up script exited with status: %d\n", ret);
             return 1;
@@ -348,42 +138,19 @@ int main(int argc, char *argv[]) {
     memset(&remote, 0, sizeof remote);
     char has_remote = 0;
 
-    if (args.remote) {
+    if (args->remote) {
         remote.sin_family = AF_INET;
         remote.sin_port = htons(1234);
         has_remote = 1;
 
-        remote.sin_addr.s_addr = inet_addr(args.remote);
+        remote.sin_addr.s_addr = inet_addr(args->remote);
         if (remote.sin_addr.s_addr == INADDR_NONE) {
-            fprintf(stderr, "failed to parse remote: %s\n", args.remote);
+            fprintf(stderr, "failed to parse remote: %s\n", args->remote);
             return 2;
         }
-        fprintf(stderr, "running in client mode with remote: %s\n", args.remote);
+        fprintf(stderr, "running in client mode with remote: %s\n", args->remote);
     }
 
-
-    sigset_t mask;
-    sigset_t orig_mask;
-    sigemptyset(&mask);
-    sigemptyset(&orig_mask);
-
-    struct sigaction act;
-    memset(&act, 0, sizeof(act));
-    act.sa_handler = handle_signal;
-
-    for (size_t i = 0; i < sizeof(QUIT_SIGNALS) / sizeof(int); i++) {
-        int signum = QUIT_SIGNALS[i];
-        sigaddset(&mask, signum);
-        if (sigaction(signum, &act, 0)) {
-            perror("sigaction");
-            return 1;
-        }
-    }
-
-    if (sigprocmask(SIG_BLOCK, &mask, &orig_mask) != 0) {
-        perror("sigprocmask");
-        return 1;
-    }
 
     fprintf(stderr, "tunnel is up\n");
     for (;;) {
@@ -397,7 +164,7 @@ int main(int argc, char *argv[]) {
             fds[1].events |= POLLOUT;
         }
 
-        int result = ppoll(fds, 2, &tm, &orig_mask);
+        int result = ppoll(fds, 2, &tm, orig_mask);
         if (result < 0) {
             if (errno != EINTR) {
                 perror("ppoll");
@@ -502,11 +269,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (args.down_script) {
-        int ret = run_updown(args.down_script, device);
+    if (args->down_script) {
+        int ret = run_updown(args->down_script, device);
         if (ret != 0) {
             fprintf(stderr, "down script exited with status: %d\n", ret);
             return 1;
         }
     }
+
+    return 0;
 }
