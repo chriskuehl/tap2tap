@@ -1,2 +1,5 @@
 *.o
+*.py[co]
+/.cache
+/.tox
 /tap2tap

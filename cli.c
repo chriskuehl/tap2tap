@@ -60,7 +60,7 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
     int opt;
     struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 0},
+        {"version", no_argument, NULL, 'V'},
         {"remote", required_argument, NULL, 'r'},
         {"iface", required_argument, NULL, 'i'},
         {"up", required_argument, NULL, 'u'},

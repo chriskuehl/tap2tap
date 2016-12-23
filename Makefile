@@ -12,3 +12,8 @@ define OBJECT_DEPENDS_ON_CORRESPONDING_HEADER
 endef
 
 $(foreach object_file,$(C_OBJS),$(eval $(call OBJECT_DEPENDS_ON_CORRESPONDING_HEADER,$(object_file))))
+
+
+.PHONY: test
+test: tap2tap
+	tox
