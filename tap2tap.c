@@ -43,10 +43,13 @@
 
 const char *VERSION = "0.0.0";
 
+const int QUIT_SIGNALS[] = {SIGTERM, SIGINT, SIGHUP, SIGQUIT};
+
 struct args {
     char *iface;
     char *remote;
     char *up_script;
+    char *down_script;
 };
 
 struct frame {
@@ -184,9 +187,11 @@ int setup_socket(in_addr_t bind_addr, uint16_t bind_port) {
 }
 
 
-void print_help(char *argv[]) {
+void print_help(int argc, char *argv[]) {
+    assert(argc >= 1);
     fprintf(stderr, "tap2tap v%s\n", VERSION);
-    fprintf(stderr, "Usage: %s [--dev {device}] [--remote {remote}] [--up {binary}]\n", argv[0]);
+    fprintf(stderr, "Usage: %s [--dev {device}] [--remote {remote}]\n", argv[0]);
+    fprintf(stderr, "       %*s [--up {binary}] [--down {binary}]\n", strlen(argv[0]), "");
     fprintf(stderr, "\n");
     fprintf(stderr, "Optional arguments:\n");
     fprintf(stderr, "  -i, --iface {iface}  Name of the tap device interface.\n");
@@ -194,6 +199,9 @@ void print_help(char *argv[]) {
     fprintf(stderr, "  -r, --remote {addr}  IPv4 address of the remote peer.\n");
     fprintf(stderr, "  -u, --up {binary}    Binary to excecute when the interface is up.\n");
     fprintf(stderr, "                       The only argument passed will be the interface name.\n");
+    fprintf(stderr, "  -d, --down {binary}  Binary to execute after the tunnel closes.\n");
+    fprintf(stderr, "                       The only argument passed will be the interface name.\n");
+    fprintf(stderr, "                       At this point, the interface still exists.\n");
     fprintf(stderr, "  -h, --help           Print this help message and exit.\n");
     fprintf(stderr, "  -V, --version        Print the current version and exit.\n");
     fprintf(stderr, "\n");
@@ -226,12 +234,13 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
         {"remote", required_argument, NULL, 'r'},
         {"iface", required_argument, NULL, 'i'},
         {"up", required_argument, NULL, 'u'},
+        {"down", required_argument, NULL, 'd'},
         {NULL, 0, NULL, 0},
     };
-    while ((opt = getopt_long(argc, argv, "+hVr:i:u:", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "+hVr:i:u:d:", long_options, NULL)) != -1) {
         switch (opt) {
             case 'h':
-                print_help(argv);
+                print_help(argc, argv);
                 exit(0);
             case 'V':
                 fprintf(stderr, "tap2tap v%s\n", VERSION);
@@ -245,6 +254,9 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
             case 'u':
                 args->up_script = optarg;
                 break;
+            case 'd':
+                args->down_script = optarg;
+                break;
             default:
                 exit(1);
         }
@@ -256,7 +268,7 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
 }
 
 
-int run_up(char *script, char *device) {
+int run_updown(char *script, char *device) {
     pid_t pid = fork();
     if (pid == 0) {  // child
         execlp(script, script, device, NULL);
@@ -275,6 +287,16 @@ int run_up(char *script, char *device) {
 }
 
 
+char exit_wanted = 0;
+int received_signal = 0;
+
+
+void handle_signal(int signum) {
+    exit_wanted = 1;
+    received_signal = signum;
+}
+
+
 int main(int argc, char *argv[]) {
     struct args args;
     memset(&args, 0, sizeof args);
@@ -289,7 +311,7 @@ int main(int argc, char *argv[]) {
     printf("tap device is: %s\n", device);
 
     if (args.up_script) {
-        int ret = run_up(args.up_script, device);
+        int ret = run_updown(args.up_script, device);
         if (ret != 0) {
             fprintf(stderr, "up script exited with status: %d\n", ret);
             return 1;
@@ -339,6 +361,30 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "running in client mode with remote: %s\n", args.remote);
     }
 
+
+    sigset_t mask;
+    sigset_t orig_mask;
+    sigemptyset(&mask);
+    sigemptyset(&orig_mask);
+
+    struct sigaction act;
+    memset(&act, 0, sizeof(act));
+    act.sa_handler = handle_signal;
+
+    for (size_t i = 0; i < sizeof(QUIT_SIGNALS) / sizeof(int); i++) {
+        int signum = QUIT_SIGNALS[i];
+        sigaddset(&mask, signum);
+        if (sigaction(signum, &act, 0)) {
+            perror("sigaction");
+            return 1;
+        }
+    }
+
+    if (sigprocmask(SIG_BLOCK, &mask, &orig_mask) != 0) {
+        perror("sigprocmask");
+        return 1;
+    }
+
     fprintf(stderr, "tunnel is up\n");
     for (;;) {
         fds[0].events = POLLIN;
@@ -351,11 +397,17 @@ int main(int argc, char *argv[]) {
             fds[1].events |= POLLOUT;
         }
 
-        // TODO: handle signals properly
-        int result = ppoll(fds, 2, &tm, NULL);
+        int result = ppoll(fds, 2, &tm, &orig_mask);
         if (result < 0) {
-            perror("ppoll");
-            return 3;
+            if (errno != EINTR) {
+                perror("ppoll");
+                return 3;
+            }
+        }
+
+        if (exit_wanted) {
+            fprintf(stderr, "\nreceived signal %d, stopping tunnel\n", received_signal);
+            break;
         }
 
         // tap can handle a write
@@ -447,6 +499,14 @@ int main(int argc, char *argv[]) {
             );
             assert(n <= MTU);
             f->len = n;
+        }
+    }
+
+    if (args.down_script) {
+        int ret = run_updown(args.down_script, device);
+        if (ret != 0) {
+            fprintf(stderr, "down script exited with status: %d\n", ret);
+            return 1;
         }
     }
 }
