@@ -26,12 +26,14 @@ void print_help(int argc, char *argv[]) {
     fprintf(stderr, "Optional arguments:\n");
     fprintf(stderr, "  -i, --iface {iface}  Name of the tap device interface.\n");
     fprintf(stderr, "                       (default: kernel auto-assign)\n");
-    fprintf(stderr, "  -r, --remote {addr}  IPv4 address of the remote peer.\n");
-    fprintf(stderr, "  -u, --up {binary}    Binary to excecute when the interface is up.\n");
+    fprintf(stderr, "      --remote {addr}  IPv4 address of the remote peer.\n");
+    fprintf(stderr, "      --up {binary}    Binary to excecute when the interface is up.\n");
     fprintf(stderr, "                       The only argument passed will be the interface name.\n");
-    fprintf(stderr, "  -d, --down {binary}  Binary to execute after the tunnel closes.\n");
+    fprintf(stderr, "      --down {binary}  Binary to execute after the tunnel closes.\n");
     fprintf(stderr, "                       The only argument passed will be the interface name.\n");
     fprintf(stderr, "                       At this point, the interface still exists.\n");
+    fprintf(stderr, "  -u, --uid {uid}      uid to drop privileges to (default: 65534)\n");
+    fprintf(stderr, "  -g, --gid {gid}      gid to drop privileges to (default: 65534)\n");
     fprintf(stderr, "  -h, --help           Print this help message and exit.\n");
     fprintf(stderr, "  -V, --version        Print the current version and exit.\n");
     fprintf(stderr, "\n");
@@ -63,11 +65,13 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
         {"version", no_argument, NULL, 'V'},
         {"remote", required_argument, NULL, 'r'},
         {"iface", required_argument, NULL, 'i'},
-        {"up", required_argument, NULL, 'u'},
-        {"down", required_argument, NULL, 'd'},
+        {"up", required_argument, NULL, 'U'},
+        {"down", required_argument, NULL, 'D'},
+        {"uid", required_argument, NULL, 'u'},
+        {"gid", required_argument, NULL, 'g'},
         {NULL, 0, NULL, 0},
     };
-    while ((opt = getopt_long(argc, argv, "+hVr:i:u:d:", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "+hVi:u:g:", long_options, NULL)) != -1) {
         switch (opt) {
             case 'h':
                 print_help(argc, argv);
@@ -81,11 +85,17 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
             case 'i':
                 args->iface = optarg;
                 break;
-            case 'u':
+            case 'U':
                 args->up_script = optarg;
                 break;
-            case 'd':
+            case 'D':
                 args->down_script = optarg;
+                break;
+            case 'u':
+                args->uid = atoi(optarg);
+                break;
+            case 'g':
+                args->gid = atoi(optarg);
                 break;
             default:
                 exit(1);
@@ -101,6 +111,8 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
 int main(int argc, char *argv[]) {
     struct args args;
     memset(&args, 0, sizeof args);
+    args.uid = 65534;
+    args.gid = 65534;
     cli_parse(&args, argc, argv);
 
     sigset_t mask;

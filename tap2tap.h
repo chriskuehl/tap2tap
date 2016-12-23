@@ -11,6 +11,8 @@ struct args {
     char *remote;
     char *up_script;
     char *down_script;
+    int uid;
+    int gid;
 };
 
 char exit_wanted;

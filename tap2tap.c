@@ -7,7 +7,6 @@
  * features still needed, in order of priority:
  *   - tests
  *   - encryption
- *   - privilege-dropping at runtime
  *
  * https://github.com/chriskuehl/tap2tap
  */
@@ -70,8 +69,6 @@ int setup_socket(in_addr_t bind_addr, uint16_t bind_port) {
 }
 
 
-
-
 int run_updown(char *script, char *device) {
     pid_t pid = fork();
     if (pid == 0) {  // child
@@ -85,8 +82,22 @@ int run_updown(char *script, char *device) {
         return WEXITSTATUS(ret);
     } else {
         perror("fork");
+        // TODO: exit from here is bad
         exit(1);
     }
+}
+
+
+int drop_privileges(int uid, int gid) {
+    if (setgid(gid) != 0) {
+        perror("setgid");
+        return 1;
+    }
+    if (setuid(uid) != 0) {
+        perror("uetgid");
+        return 1;
+    }
+    return 0;
 }
 
 
@@ -112,9 +123,13 @@ int run_tunnel(struct args *args, sigset_t *orig_mask) {
     int sockfd = setup_socket(inet_addr("0.0.0.0"), 1234);
     if (sockfd < 0) {
         fprintf(stderr, "unable to create socket\n");
-        return 2;
+        return 1;
     }
 
+    if (drop_privileges(args->uid, args->gid) != 0) {
+        fprintf(stderr, "couldn't drop privileges\n");
+        return 1;
+    }
 
     // circular queues
     struct frame recv_queue[RECV_QUEUE] = {0};
