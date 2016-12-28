@@ -20,12 +20,22 @@ void handle_signal(int signum) {
 void print_help(int argc, char *argv[]) {
     assert(argc >= 1);
     fprintf(stderr, "tap2tap v%s\n", VERSION);
-    fprintf(stderr, "Usage: %s [--dev {device}] [--remote {remote}]\n", argv[0]);
+    fprintf(stderr, "Usage: %s [--dev {device}] [--remote {remote}] [--mtu {mtu}]\n", argv[0]);
     fprintf(stderr, "       %*s [--up {binary}] [--down {binary}]\n", (unsigned int) strlen(argv[0]), "");
     fprintf(stderr, "\n");
     fprintf(stderr, "Optional arguments:\n");
-    fprintf(stderr, "  -i, --iface {iface}  Name of the tap device interface.\n");
+    fprintf(stderr, "  -i, --iface {iface}  Name of the tap device.\n");
     fprintf(stderr, "                       (default: kernel auto-assign)\n");
+    fprintf(stderr, "      --mtu {mtu}      MTU of the tap device.\n");
+    fprintf(stderr, "                       The max packet size to accept. In transit, there is\n");
+    fprintf(stderr, "                       some additional overhead:\n");
+    fprintf(stderr, "                         - 14 bytes for ethernet header\n");
+    fprintf(stderr, "                         - 20 bytes for standard IPv4 header\n");
+    fprintf(stderr, "                         - 8 bytes for UDP header\n");
+    fprintf(stderr, "                       It is advisible to subtract this overhead from your\n");
+    fprintf(stderr, "                       path MTU between the two peers in order to avoid\n");
+    fprintf(stderr, "                       fragmentation of the tunnel packets.\n");
+    fprintf(stderr, "                       (default: 1458)\n");
     fprintf(stderr, "      --remote {addr}  IPv4 address of the remote peer.\n");
     fprintf(stderr, "      --up {binary}    Binary to excecute when the interface is up.\n");
     fprintf(stderr, "                       The only argument passed will be the interface name.\n");
@@ -65,6 +75,7 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
         {"version", no_argument, NULL, 'V'},
         {"remote", required_argument, NULL, 'r'},
         {"iface", required_argument, NULL, 'i'},
+        {"mtu", required_argument, NULL, 'm'},
         {"up", required_argument, NULL, 'U'},
         {"down", required_argument, NULL, 'D'},
         {"uid", required_argument, NULL, 'u'},
@@ -97,6 +108,18 @@ void cli_parse(struct args *args, int argc, char *argv[]) {
             case 'g':
                 args->gid = atoi(optarg);
                 break;
+            case 'm':
+                args->mtu = atoi(optarg);
+                if (args->mtu < 1) {
+                    fprintf(stderr, "mtu must be >= 1 byte\n");
+                    exit(1);
+                }
+                if (args->mtu > MAX_MTU) {
+                    fprintf(stderr, "mtu must be <= %d bytes\n", MAX_MTU);
+                    exit(1);
+                }
+                printf("%d\n", args->mtu);
+                break;
             default:
                 exit(1);
         }
@@ -113,6 +136,7 @@ int main(int argc, char *argv[]) {
     memset(&args, 0, sizeof args);
     args.uid = 65534;
     args.gid = 65534;
+    args.mtu = 1458;
     cli_parse(&args, argc, argv);
 
     sigset_t mask;

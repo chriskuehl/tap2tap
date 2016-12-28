@@ -102,8 +102,7 @@ int create_tap(char *name, char return_name[IFNAMSIZ], unsigned int mtu) {
     strncpy(return_name, req.ifr_name, IFNAMSIZ);
     return_name[IFNAMSIZ - 1] = '\0';
 
-    // TODO: why must subtract here?
-    err = set_mtu(return_name, mtu - 50);
+    err = set_mtu(return_name, mtu);
     if (err < 0) {
         close(fd);
         return err;

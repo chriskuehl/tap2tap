@@ -42,7 +42,7 @@ int received_signal = 0;
 
 struct frame {
     size_t len;
-    char data[MTU];
+    char data[MAX_MTU + ETHERNET_HEADER];
 };
 
 
@@ -104,7 +104,7 @@ int drop_privileges(int uid, int gid) {
 
 int run_tunnel(struct args *args, sigset_t *orig_mask) {
     char device[IFNAMSIZ];
-    int fd = create_tap(args->iface, device, MTU);
+    int fd = create_tap(args->iface, device, args->mtu);
     if (fd < 0) {
         fprintf(stderr, "unable to create tap device\n");
         return 1;
@@ -195,7 +195,7 @@ int run_tunnel(struct args *args, sigset_t *orig_mask) {
         // tap can handle a write
         if (fds[0].revents & POLLOUT) {
             struct frame *f = &recv_queue[recv_idx];
-            assert(f->len <= MTU);
+            assert(f->len <= args->mtu + ETHERNET_HEADER);
             recv_idx = (recv_idx + 1) % RECV_QUEUE;
             recv_len -= 1;
 
@@ -215,7 +215,7 @@ int run_tunnel(struct args *args, sigset_t *orig_mask) {
         // udp socket can handle a write
         if (fds[1].revents & POLLOUT) {
             struct frame *f = &send_queue[send_idx];
-            assert(f->len <= MTU);
+            assert(f->len <= args->mtu + ETHERNET_HEADER);
             send_idx = (send_idx + 1) % SEND_QUEUE;
             send_len -= 1;
 
@@ -245,8 +245,7 @@ int run_tunnel(struct args *args, sigset_t *orig_mask) {
 
             struct frame *f = &send_queue[idx];
             memset(f, 0, sizeof(struct frame));
-            ssize_t n = read(fd, &f->data, MTU);
-            assert(n <= MTU);
+            ssize_t n = read(fd, &f->data, args->mtu + ETHERNET_HEADER);
             f->len = n;
         }
 
@@ -274,12 +273,11 @@ int run_tunnel(struct args *args, sigset_t *orig_mask) {
             ssize_t n = recvfrom(
                 sockfd,
                 &f->data,
-                MTU,
+                args->mtu + ETHERNET_HEADER,
                 0,
                 (struct sockaddr *) &remote,
                 &l
             );
-            assert(n <= MTU);
             f->len = n;
         }
     }

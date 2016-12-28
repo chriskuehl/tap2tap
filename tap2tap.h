@@ -4,7 +4,8 @@
 #include <netinet/in.h>
 #include <stdint.h>
 
-#define MTU 1500
+#define MAX_MTU 1500
+#define ETHERNET_HEADER 14
 
 struct args {
     char *iface;
@@ -13,6 +14,7 @@ struct args {
     char *down_script;
     int uid;
     int gid;
+    unsigned int mtu;
 };
 
 char exit_wanted;
