@@ -1,19 +1,19 @@
-CFLAGS=-std=gnu99 -Wall -Werror -O3 -g
-
+CFLAGS := -std=gnu99 -Wall -Werror -O3 -g
 C_SRCS := $(wildcard *.c)
 C_OBJS := $(C_SRCS:.c=.o)
 
 
-tap2tap: $(C_OBJS) Makefile
-	$(CC) $(CCFLAGS) $(C_OBJS) -o "$@"
+tap2tap: $(C_OBJS)
+	$(CC) $(CFLAGS) $(C_OBJS) -o "$@" -lsodium
 
-define OBJECT_DEPENDS_ON_CORRESPONDING_HEADER
-    $(1) : ${1:.o=.h}
-endef
-
-$(foreach object_file,$(C_OBJS),$(eval $(call OBJECT_DEPENDS_ON_CORRESPONDING_HEADER,$(object_file))))
-
+%.o: %.c
+	$(CC) $(CFLAGS) -c "$<"
 
 .PHONY: test
 test: tap2tap
 	tox
+
+.PHONY: clean
+clean:
+	rm -f *.o
+	rm -f tap2tap
