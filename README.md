@@ -62,23 +62,22 @@ on each.
 
 tap2tap has a simple one-to-one correspondence between packets sent to the
 `tap` interface and what goes over the wire. Each packet sent to the tap device
-gets embedded in a UDP datagram and when it is sent over the tunnel. This adds
+gets embedded in a UDP datagram when it is sent over the tunnel. This adds
 some overhead:
 
-* 14 bytes for the ethernet headers
+* 14 bytes for the ethernet header
 * 20 bytes for the standard IPv4 header
 * 8 bytes for the UDP header
 
 The above overhead is on *tunneled packets*, sent between the two peers. To
-avoid fragmentation, you want your tap device's MTU, plus those 42 bytes of
-overhead, to fit in one path MTU between the two peers.
+avoid fragmentation, you should pick your tap device's MTU to be equal to the
+path MTU between the peers minus those 42 bytes of overhead.
 
 Path MTU is frequently 1500 bytes, especially between well-connected peers. The
 default MTU is thus `1500 - 42 = 1458` bytes. Many connections have lower MTUs,
 though (e.g. DSL with PPP has a 1492 byte MTU, so you want to lower it by
 another 8 bytes). You can use `ping -M do -s 1472 <peer>` (to test MTU 1500).
-Lower the `-s` until it works, then you'll know the `-s` value (plus 28) is
-your path MTU.
+Lower the `-s` until it works; your path MTU will be the `-s` value plus 28.
 
 Fragmentation affects performance only, not correctness. You can use Wireshark
 on the interface used by the peers (*not* the tunnel's tap interface) to see if
